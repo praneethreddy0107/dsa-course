@@ -1,27 +1,30 @@
-import sys
 import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))  # Add backend/ to path
-
-from google.cloud import pubsub_v1, storage
 import json
-import subprocess
 import logging
+from google.cloud import pubsub_v1, storage
+import subprocess
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-from app.config import PROJECT_ID, BUCKET_NAME, PUBSUB_TOPIC
+# Config from environment variables (set in GKE)
+PROJECT_ID = os.getenv("PROJECT_ID")
+BUCKET_NAME = os.getenv("BUCKET_NAME")
+PUBSUB_TOPIC = os.getenv("PUBSUB_TOPIC")
+SUBSCRIPTION_NAME = "audio-extraction-sub"
 
 storage_client = storage.Client()
 subscriber = pubsub_v1.SubscriberClient()
 publisher = pubsub_v1.PublisherClient()
-subscription_path = subscriber.subscription_path(PROJECT_ID, "audio-extraction-sub")
+subscription_path = subscriber.subscription_path(PROJECT_ID, SUBSCRIPTION_NAME)
 topic_path = publisher.topic_path(PROJECT_ID, PUBSUB_TOPIC)
 
 def extract_audio(video_path, output_audio_path):
     subprocess.run(
         ["ffmpeg", "-i", video_path, "-vn", "-acodec", "mp3", output_audio_path],
-        check=True
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE
     )
 
 def callback(message):
@@ -36,11 +39,11 @@ def callback(message):
 
         bucket = storage_client.bucket(BUCKET_NAME)
         blob = bucket.blob(gcs_video_path)
-        local_video_path = os.path.join(os.getcwd(), f"{video_id}.mp4")
+        local_video_path = f"/tmp/{video_id}.mp4"
         blob.download_to_filename(local_video_path)
         logger.info(f"Downloaded {gcs_video_path} to {local_video_path}")
 
-        local_audio_path = os.path.join(os.getcwd(), f"{video_id}.mp3")
+        local_audio_path = f"/tmp/{video_id}.mp3"
         extract_audio(local_video_path, local_audio_path)
         logger.info(f"Extracted audio to {local_audio_path}")
 
@@ -66,7 +69,7 @@ def callback(message):
         logger.error(f"Error processing message: {str(e)}")
         message.nack()
 
-if __name__ == "__main__":
+def main():
     try:
         subscriber.create_subscription(
             name=subscription_path,
@@ -80,3 +83,6 @@ if __name__ == "__main__":
     subscriber.subscribe(subscription_path, callback=callback)
     while True:
         pass
+
+if __name__ == "__main__":
+    main()
